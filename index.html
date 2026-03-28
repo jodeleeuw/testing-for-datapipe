@@ -161,9 +161,7 @@
 </div>
 
 <h2>Upload Queue Tests (PR #142)</h2>
-<p class="queue-note">These tests require an experiment with a misconfigured OSF files link so uploads fail server-side and get queued. Expected response: HTTP 202 with OSF_UPLOAD_QUEUED.</p>
-<label for="queueExperimentID" style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Queue Test Experiment ID (bad OSF link)</label>
-<input type="text" id="queueExperimentID" placeholder="Enter experiment ID with invalid OSF files link" style="margin-bottom: 12px;">
+<p class="queue-note">Uses the experiment ID above. Before running, add some dummy characters to the experiment's <code>osfFilesLink</code> in Firestore to make the OSF upload fail. Expected response: HTTP 202 with OSF_UPLOAD_QUEUED.</p>
 <div class="test-grid">
   <div class="test-card queue-test">
     <h3>Trigger Upload Queue (CSV)</h3>
@@ -403,13 +401,9 @@
 
   // --- Upload Queue Tests ---
 
-  function getQueueExperimentID() {
-    return document.getElementById('queueExperimentID').value.trim();
-  }
-
   async function testQueueCSV() {
-    const experimentID = getQueueExperimentID();
-    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
     const csv = 'rt,response,correct\n100,left,true\n250,right,false\n';
     const result = await sendRequest('/api/data/', {
       experimentID,
@@ -424,8 +418,8 @@
   }
 
   async function testQueueBase64() {
-    const experimentID = getQueueExperimentID();
-    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
     const b64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
     const result = await sendRequest('/api/base64/', {
       experimentID,
@@ -440,8 +434,8 @@
   }
 
   async function testQueueDedup() {
-    const experimentID = getQueueExperimentID();
-    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
     const filename = `queue_dedup_${uid()}.csv`;
     const csv = 'rt,response\n100,left\n';
     log('\nSending first upload (should queue)...', 'log-info');
