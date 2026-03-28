@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataPipe Test Page</title>
+  <script src="https://unpkg.com/jspsych@8"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2"></script>
+  <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe@0.4"></script>
+  <link rel="stylesheet" href="https://unpkg.com/jspsych@8/css/jspsych.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; color: #333; }
+    h1 { margin-bottom: 8px; }
+    p.subtitle { color: #666; margin-bottom: 24px; }
+    h2 { margin: 24px 0 12px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+
+    .config-section { background: #f7f7f7; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+    input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; margin-bottom: 12px; }
+
+    .test-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 600px) { .test-grid { grid-template-columns: 1fr; } }
+
+    .test-card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; background: #fff; }
+    .test-card h3 { font-size: 15px; margin-bottom: 4px; }
+    .test-card p { font-size: 13px; color: #666; margin-bottom: 12px; }
+    .test-card.error-test { border-left: 4px solid #e74c3c; }
+    .test-card.success-test { border-left: 4px solid #27ae60; }
+
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-send { background: #3498db; color: #fff; }
+    .btn-send:hover:not(:disabled) { background: #2980b9; }
+    .btn-error { background: #e74c3c; color: #fff; }
+    .btn-error:hover:not(:disabled) { background: #c0392b; }
+    .btn-all { background: #8e44ad; color: #fff; padding: 10px 24px; font-size: 15px; }
+    .btn-all:hover:not(:disabled) { background: #732d91; }
+    .btn-clear { background: #95a5a6; color: #fff; margin-left: 8px; }
+
+    .test-card.plugin-test { border-left: 4px solid #f39c12; }
+
+    #jspsych-container { border: 2px solid #ddd; border-radius: 8px; min-height: 200px; margin-top: 8px; position: relative; }
+    #jspsych-container:empty::before { content: 'jsPsych experiment will run here...'; color: #aaa; display: flex; align-items: center; justify-content: center; height: 200px; }
+
+    #log { background: #1e1e1e; color: #d4d4d4; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 16px; border-radius: 8px; max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; }
+    .log-success { color: #6a9955; }
+    .log-error { color: #f44747; }
+    .log-info { color: #569cd6; }
+    .log-warn { color: #ce9178; }
+    .log-header { color: #dcdcaa; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<h1>DataPipe Test Page</h1>
+<p class="subtitle">Test data uploads and trigger errors to verify logging in the DataPipe system.</p>
+
+<div class="config-section">
+  <label for="experimentID">Experiment ID</label>
+  <input type="text" id="experimentID" placeholder="Enter your experiment ID">
+  <label for="apiURL">API Base URL</label>
+  <input type="text" id="apiURL" value="https://pipe.jspsych.org">
+</div>
+
+<div style="margin-bottom: 16px;">
+  <button class="btn-all" onclick="runAllTests()">Run All Tests</button>
+  <button class="btn-clear" onclick="clearLog()">Clear Log</button>
+</div>
+
+<h2>Success Tests</h2>
+<div class="test-grid">
+  <div class="test-card success-test">
+    <h3>Valid CSV Upload</h3>
+    <p>Sends a valid CSV file with a unique filename.</p>
+    <button class="btn-send" onclick="testValidCSV()">Send</button>
+  </div>
+  <div class="test-card success-test">
+    <h3>Valid JSON Upload</h3>
+    <p>Sends valid JSON data with a unique filename.</p>
+    <button class="btn-send" onclick="testValidJSON()">Send</button>
+  </div>
+</div>
+
+<h2>Error Tests</h2>
+<div class="test-grid">
+
+  <div class="test-card error-test">
+    <h3>Missing Parameters</h3>
+    <p>Sends request with no data or filename. Expected: MISSING_PARAMETER</p>
+    <button class="btn-error" onclick="testMissingParams()">Send</button>
+  </div>
+
+  <div class="test-card error-test">
+    <h3>Invalid Experiment ID</h3>
+    <p>Sends data with a fake experiment ID. Expected: EXPERIMENT_NOT_FOUND</p>
+    <button class="btn-error" onclick="testInvalidExperiment()">Send</button>
+  </div>
+
+  <div class="test-card error-test">
+    <h3>Duplicate Filename</h3>
+    <p>Sends the same filename twice. Expected: OSF_FILE_EXISTS on second attempt</p>
+    <button class="btn-error" onclick="testDuplicateFilename()">Send</button>
+  </div>
+
+  <div class="test-card error-test">
+    <h3>Empty Data Field</h3>
+    <p>Sends an empty string as data. Expected: MISSING_PARAMETER</p>
+    <button class="btn-error" onclick="testEmptyData()">Send</button>
+  </div>
+
+  <div class="test-card error-test">
+    <h3>Invalid Base64 Upload</h3>
+    <p>Sends non-base64 data to the base64 endpoint. Expected: INVALID_BASE64_DATA</p>
+    <button class="btn-error" onclick="testInvalidBase64()">Send</button>
+  </div>
+
+  <div class="test-card error-test">
+    <h3>Valid Base64 Upload</h3>
+    <p>Sends a small valid base64 image to the base64 endpoint.</p>
+    <button class="btn-send" onclick="testValidBase64()">Send</button>
+  </div>
+
+</div>
+
+<h2>jsPsych Pipe Plugin Tests</h2>
+<p style="font-size: 13px; color: #666; margin-bottom: 12px;">These tests run a mini jsPsych experiment using the <code>@jspsych-contrib/plugin-pipe</code> plugin to send data through DataPipe.</p>
+<div class="test-grid">
+  <div class="test-card plugin-test">
+    <h3>Plugin: Save CSV</h3>
+    <p>Runs a 1-trial jsPsych experiment and pipes the CSV results via the plugin.</p>
+    <button class="btn-send" onclick="testPluginSaveCSV()">Run</button>
+  </div>
+  <div class="test-card plugin-test">
+    <h3>Plugin: Save JSON</h3>
+    <p>Runs a 1-trial jsPsych experiment and pipes the JSON results via the plugin.</p>
+    <button class="btn-send" onclick="testPluginSaveJSON()">Run</button>
+  </div>
+</div>
+<div id="jspsych-container"></div>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+  function getConfig() {
+    return {
+      experimentID: document.getElementById('experimentID').value.trim(),
+      apiURL: document.getElementById('apiURL').value.trim().replace(/\/$/, ''),
+    };
+  }
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function log(msg, cls = '') {
+    const el = document.getElementById('log');
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = msg + '\n';
+    el.appendChild(span);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function clearLog() {
+    document.getElementById('log').innerHTML = '';
+  }
+
+  async function sendRequest(endpoint, body, label) {
+    const { apiURL } = getConfig();
+    const url = `${apiURL}${endpoint}`;
+    log(`\n--- ${label} ---`, 'log-header');
+    log(`POST ${url}`, 'log-info');
+    log(`Body: ${JSON.stringify(body, null, 2)}`, 'log-info');
+
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      const statusClass = resp.ok ? 'log-success' : 'log-error';
+      log(`Status: ${resp.status}`, statusClass);
+      log(`Response: ${JSON.stringify(data, null, 2)}`, statusClass);
+      return { status: resp.status, data };
+    } catch (err) {
+      log(`Network error: ${err.message}`, 'log-error');
+      return { status: 0, data: null, error: err.message };
+    }
+  }
+
+  // --- Success Tests ---
+
+  async function testValidCSV() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+    const csv = 'rt,response,correct\n100,left,true\n250,right,false\n';
+    await sendRequest('/api/data/', {
+      experimentID,
+      data: csv,
+      filename: `test_csv_${uid()}.csv`,
+    }, 'Valid CSV Upload');
+  }
+
+  async function testValidJSON() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+    const json = JSON.stringify([
+      { rt: 100, response: 'left', correct: true },
+      { rt: 250, response: 'right', correct: false },
+    ]);
+    await sendRequest('/api/data/', {
+      experimentID,
+      data: json,
+      filename: `test_json_${uid()}.json`,
+    }, 'Valid JSON Upload');
+  }
+
+  // --- Error Tests ---
+
+  async function testMissingParams() {
+    const { experimentID } = getConfig();
+    await sendRequest('/api/data/', {
+      experimentID: experimentID || undefined,
+      // deliberately missing data and filename
+    }, 'Missing Parameters');
+  }
+
+  async function testInvalidExperiment() {
+    await sendRequest('/api/data/', {
+      experimentID: 'nonexistent_experiment_' + uid(),
+      data: 'test',
+      filename: 'test.csv',
+    }, 'Invalid Experiment ID');
+  }
+
+  async function testDuplicateFilename() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+    const filename = `dup_test_${uid()}.csv`;
+    const csv = 'rt,response\n100,left\n';
+    log('\nSending first upload...', 'log-info');
+    await sendRequest('/api/data/', { experimentID, data: csv, filename }, 'Duplicate Filename - First Upload');
+    log('Sending duplicate...', 'log-info');
+    await sendRequest('/api/data/', { experimentID, data: csv, filename }, 'Duplicate Filename - Second Upload');
+  }
+
+  async function testEmptyData() {
+    const { experimentID } = getConfig();
+    await sendRequest('/api/data/', {
+      experimentID: experimentID || 'test',
+      data: '',
+      filename: 'empty.csv',
+    }, 'Empty Data Field');
+  }
+
+  async function testInvalidBase64() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+    await sendRequest('/api/base64/', {
+      experimentID,
+      data: 'this is not valid base64!!!@@@',
+      filename: `bad_b64_${uid()}.png`,
+    }, 'Invalid Base64 Data');
+  }
+
+  async function testValidBase64() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+    // 1x1 red pixel PNG as base64
+    const b64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+    await sendRequest('/api/base64/', {
+      experimentID,
+      data: b64,
+      filename: `test_b64_${uid()}.png`,
+    }, 'Valid Base64 Upload');
+  }
+
+  // --- jsPsych Plugin Tests ---
+
+  async function runPluginExperiment(format) {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+
+    const container = document.getElementById('jspsych-container');
+    container.innerHTML = '';
+
+    const filename = `plugin_${format}_${uid()}.${format === 'csv' ? 'csv' : 'json'}`;
+    log(`\n--- jsPsych Plugin: Save ${format.toUpperCase()} ---`, 'log-header');
+    log(`Filename: ${filename}`, 'log-info');
+    log('Starting jsPsych experiment (press any key on the trial)...', 'log-info');
+
+    const jsPsych = initJsPsych({
+      display_element: 'jspsych-container',
+      on_finish: function() {
+        log('jsPsych experiment finished.', 'log-success');
+        // Reset the container after a delay
+        setTimeout(() => { container.innerHTML = ''; }, 2000);
+      }
+    });
+
+    const trial = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: '<p style="font-size:18px;">Press any key to generate trial data.</p>',
+    };
+
+    const save_data = {
+      type: jsPsychPipe,
+      action: 'save',
+      experiment_id: experimentID,
+      filename: filename,
+      data_string: function() {
+        const data = format === 'csv' ? jsPsych.data.get().csv() : jsPsych.data.get().json();
+        log(`Data to send (${format}):\n${data}`, 'log-info');
+        return data;
+      },
+      wait_message: '<p>Saving data via DataPipe plugin...</p>',
+      on_finish: function(data) {
+        if (data.success) {
+          log(`Plugin response: success`, 'log-success');
+        } else {
+          log(`Plugin response: failed (${data.error || 'unknown error'})`, 'log-error');
+        }
+        log(`Full trial data: ${JSON.stringify(data, null, 2)}`, 'log-info');
+      }
+    };
+
+    jsPsych.run([trial, save_data]);
+  }
+
+  function testPluginSaveCSV() {
+    runPluginExperiment('csv');
+  }
+
+  function testPluginSaveJSON() {
+    runPluginExperiment('json');
+  }
+
+  // --- Run All ---
+
+  async function runAllTests() {
+    clearLog();
+    log('=== Running All Tests ===\n', 'log-header');
+    await testMissingParams();
+    await testInvalidExperiment();
+    await testEmptyData();
+    await testValidCSV();
+    await testValidJSON();
+    await testInvalidBase64();
+    await testValidBase64();
+    await testDuplicateFilename();
+    log('\n=== All Tests Complete ===', 'log-header');
+  }
+</script>
+
+</body>
+</html>
