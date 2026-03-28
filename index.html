@@ -10,7 +10,14 @@
   <link rel="stylesheet" href="https://unpkg.com/jspsych@8/css/jspsych.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; color: #333; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 0; color: #333; }
+
+    .page-layout { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
+    @media (max-width: 900px) { .page-layout { grid-template-columns: 1fr; height: auto; } }
+
+    .left-panel { padding: 20px 24px; overflow-y: auto; }
+    .right-panel { padding: 20px 24px; background: #1a1a2e; display: flex; flex-direction: column; overflow: hidden; }
+
     h1 { margin-bottom: 8px; }
     p.subtitle { color: #666; margin-bottom: 24px; }
     h2 { margin: 24px 0 12px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
@@ -43,24 +50,43 @@
     #jspsych-container { border: 2px solid #ddd; border-radius: 8px; min-height: 200px; margin-top: 8px; position: relative; }
     #jspsych-container:empty::before { content: 'jsPsych experiment will run here...'; color: #aaa; display: flex; align-items: center; justify-content: center; height: 200px; }
 
-    #log { background: #1e1e1e; color: #d4d4d4; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 16px; border-radius: 8px; max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px; }
+    .right-panel h2 { color: #ccc; border-bottom-color: #333; }
+    #log { background: #1e1e1e; color: #d4d4d4; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 16px; border-radius: 8px; flex: 1; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
     .log-success { color: #6a9955; }
     .log-error { color: #f44747; }
     .log-info { color: #569cd6; }
     .log-warn { color: #ce9178; }
     .log-header { color: #dcdcaa; font-weight: bold; }
+
+    .server-toggle { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .toggle-switch { position: relative; width: 48px; height: 26px; cursor: pointer; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: #27ae60; border-radius: 26px; transition: background 0.2s; }
+    .toggle-slider::before { content: ''; position: absolute; height: 20px; width: 20px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-switch input:checked + .toggle-slider { background: #e67e22; }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); }
+    .server-label { font-weight: 600; font-size: 14px; }
+    .server-label .url { font-weight: 400; color: #888; font-size: 13px; }
   </style>
 </head>
 <body>
+
+<div class="page-layout">
+<div class="left-panel">
 
 <h1>DataPipe Test Page</h1>
 <p class="subtitle">Test data uploads and trigger errors to verify logging in the DataPipe system.</p>
 
 <div class="config-section">
+  <div class="server-toggle">
+    <span class="server-label">Server: <span id="serverName">Production</span> <span class="url" id="serverURL">https://pipe.jspsych.org</span></span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="serverToggle" onchange="toggleServer()">
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
   <label for="experimentID">Experiment ID</label>
   <input type="text" id="experimentID" placeholder="Enter your experiment ID">
-  <label for="apiURL">API Base URL</label>
-  <input type="text" id="apiURL" value="https://pipe.jspsych.org">
 </div>
 
 <div style="margin-bottom: 16px;">
@@ -139,14 +165,32 @@
 </div>
 <div id="jspsych-container"></div>
 
-<h2>Log</h2>
-<div id="log"></div>
+</div><!-- end left-panel -->
+
+<div class="right-panel">
+  <h2 style="margin-top: 0;">Log</h2>
+  <div id="log"></div>
+</div><!-- end right-panel -->
+
+</div><!-- end page-layout -->
 
 <script>
+  const SERVERS = {
+    production: 'https://pipe.jspsych.org',
+    test: 'https://datapipe-test.web.app',
+  };
+
+  function toggleServer() {
+    const isTest = document.getElementById('serverToggle').checked;
+    document.getElementById('serverName').textContent = isTest ? 'Test' : 'Production';
+    document.getElementById('serverURL').textContent = isTest ? SERVERS.test : SERVERS.production;
+  }
+
   function getConfig() {
+    const isTest = document.getElementById('serverToggle').checked;
     return {
       experimentID: document.getElementById('experimentID').value.trim(),
-      apiURL: document.getElementById('apiURL').value.trim().replace(/\/$/, ''),
+      apiURL: isTest ? SERVERS.test : SERVERS.production,
     };
   }
 
