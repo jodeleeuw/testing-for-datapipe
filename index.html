@@ -45,7 +45,8 @@
     .btn-all:hover:not(:disabled) { background: #732d91; }
     .btn-clear { background: #95a5a6; color: #fff; margin-left: 8px; }
 
-    .test-card.plugin-test { border-left: 4px solid #f39c12; }
+    .test-card.queue-test { border-left: 4px solid #f39c12; }
+    .queue-note { font-size: 12px; color: #888; margin-bottom: 12px; }
 
     #jspsych-container { border: 2px solid #ddd; border-radius: 8px; min-height: 200px; margin-top: 8px; position: relative; }
     #jspsych-container:empty::before { content: 'jsPsych experiment will run here...'; color: #aaa; display: flex; align-items: center; justify-content: center; height: 200px; }
@@ -158,6 +159,29 @@
 
 
 </div>
+
+<h2>Upload Queue Tests (PR #142)</h2>
+<p class="queue-note">These tests require an experiment with a misconfigured OSF files link so uploads fail server-side and get queued. Expected response: HTTP 202 with OSF_UPLOAD_QUEUED.</p>
+<label for="queueExperimentID" style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Queue Test Experiment ID (bad OSF link)</label>
+<input type="text" id="queueExperimentID" placeholder="Enter experiment ID with invalid OSF files link" style="margin-bottom: 12px;">
+<div class="test-grid">
+  <div class="test-card queue-test">
+    <h3>Trigger Upload Queue (CSV)</h3>
+    <p>Sends valid CSV to an experiment with a bad OSF link. Expected: 202 OSF_UPLOAD_QUEUED</p>
+    <button class="btn-error" onclick="testQueueCSV()">Send</button>
+  </div>
+  <div class="test-card queue-test">
+    <h3>Trigger Upload Queue (Base64)</h3>
+    <p>Sends valid base64 to the base64 endpoint with a bad OSF link. Expected: 202 OSF_UPLOAD_QUEUED</p>
+    <button class="btn-error" onclick="testQueueBase64()">Send</button>
+  </div>
+  <div class="test-card queue-test">
+    <h3>Queue Deduplication</h3>
+    <p>Sends the same filename twice. Second request should not create a duplicate queue entry.</p>
+    <button class="btn-error" onclick="testQueueDedup()">Send</button>
+  </div>
+</div>
+
 <div id="jspsych-container"></div>
 
 </div><!-- end left-panel -->
@@ -375,6 +399,58 @@
 
   function testPluginSaveJSON() {
     runPluginExperiment('json');
+  }
+
+  // --- Upload Queue Tests ---
+
+  function getQueueExperimentID() {
+    return document.getElementById('queueExperimentID').value.trim();
+  }
+
+  async function testQueueCSV() {
+    const experimentID = getQueueExperimentID();
+    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const csv = 'rt,response,correct\n100,left,true\n250,right,false\n';
+    const result = await sendRequest('/api/data/', {
+      experimentID,
+      data: csv,
+      filename: `queue_csv_${uid()}.csv`,
+    }, 'Upload Queue: CSV');
+    if (result.status === 202) {
+      log('Upload was queued for retry (202). Check Firestore uploadQueue collection and Cloud Storage upload-queue/ path.', 'log-success');
+    } else if (result.status === 201) {
+      log('Upload succeeded directly (201) — OSF link may be valid. Use an experiment with a bad OSF link to trigger queueing.', 'log-warn');
+    }
+  }
+
+  async function testQueueBase64() {
+    const experimentID = getQueueExperimentID();
+    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const b64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+    const result = await sendRequest('/api/base64/', {
+      experimentID,
+      data: b64,
+      filename: `queue_b64_${uid()}.png`,
+    }, 'Upload Queue: Base64');
+    if (result.status === 202) {
+      log('Upload was queued for retry (202). Check Firestore uploadQueue collection and Cloud Storage upload-queue/ path.', 'log-success');
+    } else if (result.status === 201) {
+      log('Upload succeeded directly (201) — OSF link may be valid. Use an experiment with a bad OSF link to trigger queueing.', 'log-warn');
+    }
+  }
+
+  async function testQueueDedup() {
+    const experimentID = getQueueExperimentID();
+    if (!experimentID) { log('Set a queue test experiment ID first.', 'log-warn'); return; }
+    const filename = `queue_dedup_${uid()}.csv`;
+    const csv = 'rt,response\n100,left\n';
+    log('\nSending first upload (should queue)...', 'log-info');
+    const r1 = await sendRequest('/api/data/', { experimentID, data: csv, filename }, 'Queue Dedup - First Upload');
+    log('Sending same filename again (should deduplicate)...', 'log-info');
+    const r2 = await sendRequest('/api/data/', { experimentID, data: csv, filename }, 'Queue Dedup - Second Upload');
+    if (r1.status === 202 && r2.status === 202) {
+      log('Both returned 202. Check Firestore uploadQueue — there should be only one entry for this filename.', 'log-success');
+    }
   }
 
   // --- Run All ---
