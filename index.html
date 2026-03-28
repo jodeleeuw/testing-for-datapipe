@@ -106,6 +106,21 @@
     <p>Sends valid JSON data with a unique filename.</p>
     <button class="btn-send" onclick="testValidJSON()">Send</button>
   </div>
+  <div class="test-card success-test">
+    <h3>Valid Base64 Upload</h3>
+    <p>Sends a small valid base64 image to the base64 endpoint.</p>
+    <button class="btn-send" onclick="testValidBase64()">Send</button>
+  </div>
+  <div class="test-card success-test">
+    <h3>Plugin: Save CSV</h3>
+    <p>Runs a 1-trial jsPsych experiment and pipes the CSV results via the plugin.</p>
+    <button class="btn-send" onclick="testPluginSaveCSV()">Run</button>
+  </div>
+  <div class="test-card success-test">
+    <h3>Plugin: Save JSON</h3>
+    <p>Runs a 1-trial jsPsych experiment and pipes the JSON results via the plugin.</p>
+    <button class="btn-send" onclick="testPluginSaveJSON()">Run</button>
+  </div>
 </div>
 
 <h2>Error Tests</h2>
@@ -141,27 +156,7 @@
     <button class="btn-error" onclick="testInvalidBase64()">Send</button>
   </div>
 
-  <div class="test-card error-test">
-    <h3>Valid Base64 Upload</h3>
-    <p>Sends a small valid base64 image to the base64 endpoint.</p>
-    <button class="btn-send" onclick="testValidBase64()">Send</button>
-  </div>
 
-</div>
-
-<h2>jsPsych Pipe Plugin Tests</h2>
-<p style="font-size: 13px; color: #666; margin-bottom: 12px;">These tests run a mini jsPsych experiment using the <code>@jspsych-contrib/plugin-pipe</code> plugin to send data through DataPipe.</p>
-<div class="test-grid">
-  <div class="test-card plugin-test">
-    <h3>Plugin: Save CSV</h3>
-    <p>Runs a 1-trial jsPsych experiment and pipes the CSV results via the plugin.</p>
-    <button class="btn-send" onclick="testPluginSaveCSV()">Run</button>
-  </div>
-  <div class="test-card plugin-test">
-    <h3>Plugin: Save JSON</h3>
-    <p>Runs a 1-trial jsPsych experiment and pipes the JSON results via the plugin.</p>
-    <button class="btn-send" onclick="testPluginSaveJSON()">Run</button>
-  </div>
 </div>
 <div id="jspsych-container"></div>
 
