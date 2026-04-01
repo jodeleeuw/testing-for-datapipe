@@ -475,61 +475,140 @@
   }
 
   // --- Early Persist / OOM Tests ---
+  //
+  // Strategy: stream the JSON body to the server using a ReadableStream so
+  // the browser never holds the full payload in memory at once. The body
+  // has the shape: {"experimentID":"…","data":"[{…},{…},…]","filename":"…"}
+  // We stream the "data" value as a very long string of repeated JSON rows.
 
-  function generateLargeJSON(targetMB) {
-    // Generate a JSON array of fake trial rows until we hit the target size.
-    // Each row is ~100 bytes, so we need targetMB * 1e6 / 100 rows.
-    const rowCount = Math.ceil((targetMB * 1e6) / 100);
-    const rows = [];
-    for (let i = 0; i < rowCount; i++) {
-      rows.push({
-        trial_type: 'html-keyboard-response',
-        trial_index: i,
-        time_elapsed: Math.floor(Math.random() * 10000),
-        rt: Math.floor(Math.random() * 2000),
-        response: 'ArrowLeft',
-        stimulus: 'padding_' + 'x'.repeat(20),
-      });
-    }
-    return JSON.stringify(rows);
+  function makeJSONRow(i) {
+    // ~130 bytes per row
+    return `{"trial_type":"html-keyboard-response","trial_index":${i},"time_elapsed":${Math.floor(Math.random()*10000)},"rt":${Math.floor(Math.random()*2000)},"response":"ArrowLeft","stimulus":"${'x'.repeat(40)}"}`;
   }
 
-  function generateLargeBase64(targetMB) {
-    // Generate random bytes, then base64 encode. Base64 adds ~33% overhead,
-    // so generate targetMB * 0.75 raw bytes to get ~targetMB of base64 text.
-    const rawBytes = Math.ceil(targetMB * 0.75 * 1e6);
-    const arr = new Uint8Array(rawBytes);
-    // Fill in chunks (crypto.getRandomValues has a 65536-byte limit)
-    for (let i = 0; i < rawBytes; i += 65536) {
-      const chunk = new Uint8Array(Math.min(65536, rawBytes - i));
-      crypto.getRandomValues(chunk);
-      arr.set(chunk, i);
-    }
-    // Convert to base64 string in chunks to avoid call stack issues
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < arr.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, arr.subarray(i, i + chunkSize));
-    }
-    return 'data:application/octet-stream;base64,' + btoa(binary);
+  function createStreamingJSONBody(experimentID, filename, targetMB) {
+    const encoder = new TextEncoder();
+    const targetBytes = targetMB * 1e6;
+    let bytesSent = 0;
+    let rowIndex = 0;
+    let phase = 'prefix'; // prefix → rows → suffix
+
+    // We embed the data array as a JSON *string* value (since that's what
+    // the API expects — the `data` field is a string of JSON/CSV).
+    const prefix = `{"experimentID":${JSON.stringify(experimentID)},"data":"[`;
+    const suffix = `]","filename":${JSON.stringify(filename)}}`;
+
+    return new ReadableStream({
+      pull(controller) {
+        if (phase === 'prefix') {
+          controller.enqueue(encoder.encode(prefix));
+          bytesSent += prefix.length;
+          phase = 'rows';
+          return;
+        }
+
+        if (phase === 'rows') {
+          // Enqueue a batch of rows per pull to keep throughput up
+          const batchSize = 500;
+          let chunk = '';
+          for (let i = 0; i < batchSize && bytesSent < targetBytes; i++) {
+            const row = makeJSONRow(rowIndex++);
+            // Escape for JSON string value (rows go inside "data":"...")
+            const escaped = row.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            chunk += (rowIndex > 1 ? ',' : '') + escaped;
+            bytesSent += escaped.length + 1;
+          }
+          controller.enqueue(encoder.encode(chunk));
+
+          if (bytesSent >= targetBytes) {
+            phase = 'suffix';
+          }
+          return;
+        }
+
+        if (phase === 'suffix') {
+          controller.enqueue(encoder.encode(suffix));
+          bytesSent += suffix.length;
+          controller.close();
+        }
+      }
+    });
   }
 
-  async function sendLargeRequest(endpoint, body, label, progressId) {
+  function createStreamingBase64Body(experimentID, filename, targetMB) {
+    const encoder = new TextEncoder();
+    // We need targetMB of base64 text. Base64 uses 4 chars per 3 bytes,
+    // so we generate chunks of random bytes and encode them.
+    const targetChars = targetMB * 1e6;
+    let charsSent = 0;
+    let phase = 'prefix';
+
+    const prefix = `{"experimentID":${JSON.stringify(experimentID)},"data":"data:application/octet-stream;base64,`;
+    const suffix = `","filename":${JSON.stringify(filename)}}`;
+
+    // Pre-generate a reusable 48KB random chunk (encodes to 64KB base64 with no padding issues)
+    const rawChunkSize = 48 * 1024;
+    const reusableRaw = new Uint8Array(rawChunkSize);
+
+    function encodeChunkToBase64(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    return new ReadableStream({
+      pull(controller) {
+        if (phase === 'prefix') {
+          controller.enqueue(encoder.encode(prefix));
+          phase = 'data';
+          return;
+        }
+
+        if (phase === 'data') {
+          // Generate and enqueue several base64 chunks per pull
+          const chunksPerPull = 10;
+          let batch = '';
+          for (let c = 0; c < chunksPerPull && charsSent < targetChars; c++) {
+            crypto.getRandomValues(reusableRaw);
+            const b64 = encodeChunkToBase64(reusableRaw);
+            batch += b64;
+            charsSent += b64.length;
+          }
+          controller.enqueue(encoder.encode(batch));
+
+          if (charsSent >= targetChars) {
+            phase = 'suffix';
+          }
+          return;
+        }
+
+        if (phase === 'suffix') {
+          controller.enqueue(encoder.encode(suffix));
+          controller.close();
+        }
+      }
+    });
+  }
+
+  async function sendStreamingRequest(endpoint, body, sizeMB, label, progressId) {
     const { apiURL } = getConfig();
     const url = `${apiURL}${endpoint}`;
     const progress = document.getElementById(progressId);
     log(`\n--- ${label} ---`, 'log-header');
     log(`POST ${url}`, 'log-info');
-    log(`Payload size: ~${(JSON.stringify(body).length / 1e6).toFixed(1)} MB (not logging body)`, 'log-info');
+    log(`Target payload: ~${sizeMB} MB (streaming — browser memory stays low)`, 'log-info');
 
-    progress.style.width = '30%';
+    progress.style.width = '50%';
 
     try {
-      progress.style.width = '60%';
+      // duplex: 'half' is required for streaming request bodies in Chrome
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body,
+        duplex: 'half',
       });
       progress.style.width = '90%';
 
@@ -579,27 +658,19 @@
 
     const sizeMB = parseInt(document.getElementById('oomSizeMB').value) || 150;
     const btn = document.getElementById('oomBtn');
+    const filename = `oom_test_${uid()}.json`;
     btn.disabled = true;
-    btn.textContent = 'Generating...';
+    btn.textContent = 'Streaming...';
 
-    // Generate in a setTimeout to let the UI update
-    setTimeout(async () => {
-      try {
-        log(`Generating ~${sizeMB} MB JSON payload...`, 'log-info');
-        const data = generateLargeJSON(sizeMB);
-        log(`Generated ${(data.length / 1e6).toFixed(1)} MB of JSON data. Sending...`, 'log-info');
-
-        btn.textContent = 'Sending...';
-        await sendLargeRequest('/api/data/', {
-          experimentID,
-          data,
-          filename: `oom_test_${uid()}.json`,
-        }, `Large Payload OOM Test (~${sizeMB} MB JSON)`, 'oomProgress');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send';
-      }
-    }, 50);
+    try {
+      log(`Streaming ~${sizeMB} MB JSON payload to server...`, 'log-info');
+      const body = createStreamingJSONBody(experimentID, filename, sizeMB);
+      await sendStreamingRequest('/api/data/', body, sizeMB,
+        `Large Payload OOM Test (~${sizeMB} MB JSON)`, 'oomProgress');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
   }
 
   async function testLargePayloadOOMBase64() {
@@ -608,26 +679,19 @@
 
     const sizeMB = parseInt(document.getElementById('oomBase64SizeMB').value) || 100;
     const btn = document.getElementById('oomBase64Btn');
+    const filename = `oom_b64_test_${uid()}.bin`;
     btn.disabled = true;
-    btn.textContent = 'Generating...';
+    btn.textContent = 'Streaming...';
 
-    setTimeout(async () => {
-      try {
-        log(`Generating ~${sizeMB} MB base64 payload...`, 'log-info');
-        const data = generateLargeBase64(sizeMB);
-        log(`Generated ${(data.length / 1e6).toFixed(1)} MB of base64 data. Sending...`, 'log-info');
-
-        btn.textContent = 'Sending...';
-        await sendLargeRequest('/api/base64/', {
-          experimentID,
-          data,
-          filename: `oom_b64_test_${uid()}.bin`,
-        }, `Large Payload OOM Test (~${sizeMB} MB Base64)`, 'oomBase64Progress');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send';
-      }
-    }, 50);
+    try {
+      log(`Streaming ~${sizeMB} MB base64 payload to server...`, 'log-info');
+      const body = createStreamingBase64Body(experimentID, filename, sizeMB);
+      await sendStreamingRequest('/api/base64/', body, sizeMB,
+        `Large Payload OOM Test (~${sizeMB} MB Base64)`, 'oomBase64Progress');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
   }
 
   // --- Run All ---
