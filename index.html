@@ -46,7 +46,11 @@
     .btn-clear { background: #95a5a6; color: #fff; margin-left: 8px; }
 
     .test-card.queue-test { border-left: 4px solid #f39c12; }
+    .test-card.oom-test { border-left: 4px solid #9b59b6; }
     .queue-note { font-size: 12px; color: #888; margin-bottom: 12px; }
+    .size-input { width: 80px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; margin: 0 4px; }
+    .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin: 8px 0; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: #9b59b6; border-radius: 3px; transition: width 0.3s; width: 0%; }
 
     #jspsych-container { border: 2px solid #ddd; border-radius: 8px; min-height: 200px; margin-top: 8px; position: relative; }
     #jspsych-container:empty::before { content: 'jsPsych experiment will run here...'; color: #aaa; display: flex; align-items: center; justify-content: center; height: 200px; }
@@ -177,6 +181,29 @@
     <h3>Queue Deduplication</h3>
     <p>Sends the same filename twice. Second request should not create a duplicate queue entry.</p>
     <button class="btn-error" onclick="testQueueDedup()">Send</button>
+  </div>
+</div>
+
+<h2>Early Persist / OOM Recovery Tests (PR #146)</h2>
+<p class="queue-note">Sends a large payload to trigger an out-of-memory crash in the Cloud Function. The data should be persisted to Cloud Storage (<code>pending-data/</code>) before the crash, and recovered by <code>scheduledPendingRecovery</code> within ~15 minutes. After running, check: (1) Cloud Storage <code>pending-data/</code> for the persisted file, (2) after ~15 min, the <code>uploadQueue</code> collection in Firestore for a promoted entry, (3) the experiment dashboard QueuePanel.</p>
+<div class="test-grid">
+  <div class="test-card oom-test">
+    <h3>Large Payload OOM (JSON)</h3>
+    <p>Generates a JSON payload of configurable size and sends it. The function should persist the data before crashing.</p>
+    <label style="font-size: 13px; font-weight: normal; margin-bottom: 2px;">Payload size:
+      <input type="number" id="oomSizeMB" class="size-input" value="150" min="10" max="500"> MB
+    </label>
+    <div class="progress-bar"><div class="progress-bar-fill" id="oomProgress"></div></div>
+    <button class="btn-error" onclick="testLargePayloadOOM()" id="oomBtn">Send</button>
+  </div>
+  <div class="test-card oom-test">
+    <h3>Large Payload OOM (Base64)</h3>
+    <p>Generates a large base64 payload (~33% larger in transit). More likely to trigger OOM due to decode overhead.</p>
+    <label style="font-size: 13px; font-weight: normal; margin-bottom: 2px;">Payload size:
+      <input type="number" id="oomBase64SizeMB" class="size-input" value="100" min="10" max="500"> MB
+    </label>
+    <div class="progress-bar"><div class="progress-bar-fill" id="oomBase64Progress"></div></div>
+    <button class="btn-error" onclick="testLargePayloadOOMBase64()" id="oomBase64Btn">Send</button>
   </div>
 </div>
 
@@ -445,6 +472,162 @@
     if (r1.status === 202 && r2.status === 202) {
       log('Both returned 202. Check Firestore uploadQueue — there should be only one entry for this filename.', 'log-success');
     }
+  }
+
+  // --- Early Persist / OOM Tests ---
+
+  function generateLargeJSON(targetMB) {
+    // Generate a JSON array of fake trial rows until we hit the target size.
+    // Each row is ~100 bytes, so we need targetMB * 1e6 / 100 rows.
+    const rowCount = Math.ceil((targetMB * 1e6) / 100);
+    const rows = [];
+    for (let i = 0; i < rowCount; i++) {
+      rows.push({
+        trial_type: 'html-keyboard-response',
+        trial_index: i,
+        time_elapsed: Math.floor(Math.random() * 10000),
+        rt: Math.floor(Math.random() * 2000),
+        response: 'ArrowLeft',
+        stimulus: 'padding_' + 'x'.repeat(20),
+      });
+    }
+    return JSON.stringify(rows);
+  }
+
+  function generateLargeBase64(targetMB) {
+    // Generate random bytes, then base64 encode. Base64 adds ~33% overhead,
+    // so generate targetMB * 0.75 raw bytes to get ~targetMB of base64 text.
+    const rawBytes = Math.ceil(targetMB * 0.75 * 1e6);
+    const arr = new Uint8Array(rawBytes);
+    // Fill in chunks (crypto.getRandomValues has a 65536-byte limit)
+    for (let i = 0; i < rawBytes; i += 65536) {
+      const chunk = new Uint8Array(Math.min(65536, rawBytes - i));
+      crypto.getRandomValues(chunk);
+      arr.set(chunk, i);
+    }
+    // Convert to base64 string in chunks to avoid call stack issues
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < arr.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, arr.subarray(i, i + chunkSize));
+    }
+    return 'data:application/octet-stream;base64,' + btoa(binary);
+  }
+
+  async function sendLargeRequest(endpoint, body, label, progressId) {
+    const { apiURL } = getConfig();
+    const url = `${apiURL}${endpoint}`;
+    const progress = document.getElementById(progressId);
+    log(`\n--- ${label} ---`, 'log-header');
+    log(`POST ${url}`, 'log-info');
+    log(`Payload size: ~${(JSON.stringify(body).length / 1e6).toFixed(1)} MB (not logging body)`, 'log-info');
+
+    progress.style.width = '30%';
+
+    try {
+      progress.style.width = '60%';
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      progress.style.width = '90%';
+
+      let data;
+      try {
+        data = await resp.json();
+      } catch {
+        data = null;
+      }
+
+      const statusClass = resp.ok ? 'log-success' : 'log-error';
+      log(`Status: ${resp.status}`, statusClass);
+      if (data) {
+        log(`Response: ${JSON.stringify(data, null, 2)}`, statusClass);
+      }
+
+      progress.style.width = '100%';
+
+      if (resp.status === 0 || resp.status >= 500) {
+        log('\nThis looks like an OOM crash (no response or 5xx).', 'log-warn');
+        log('Check Cloud Storage pending-data/ for the persisted file.', 'log-warn');
+        log('The scheduledPendingRecovery function should promote it to uploadQueue within ~15 minutes.', 'log-warn');
+      } else if (resp.status === 201) {
+        log('\nUpload succeeded — payload was not large enough to trigger OOM. Try increasing the size.', 'log-warn');
+      } else if (resp.status === 202) {
+        log('\nUpload was queued (202) — the function survived but OSF upload failed. Data is safe.', 'log-success');
+      }
+
+      return { status: resp.status, data };
+    } catch (err) {
+      progress.style.width = '100%';
+      progress.style.background = '#e74c3c';
+      log(`Network error / connection reset: ${err.message}`, 'log-error');
+      log('\nThis is the expected result for an OOM crash — the function was killed before it could respond.', 'log-success');
+      log('Verification steps:', 'log-info');
+      log('  1. Check Cloud Storage: pending-data/<experimentID>/ should contain the persisted file', 'log-info');
+      log('  2. Wait ~15 minutes for scheduledPendingRecovery to run', 'log-info');
+      log('  3. Check Firestore: uploadQueue collection should have a new entry', 'log-info');
+      log('  4. Check the experiment dashboard: QueuePanel should show the recovered file', 'log-info');
+      return { status: 0, data: null, error: err.message };
+    }
+  }
+
+  async function testLargePayloadOOM() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+
+    const sizeMB = parseInt(document.getElementById('oomSizeMB').value) || 150;
+    const btn = document.getElementById('oomBtn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    // Generate in a setTimeout to let the UI update
+    setTimeout(async () => {
+      try {
+        log(`Generating ~${sizeMB} MB JSON payload...`, 'log-info');
+        const data = generateLargeJSON(sizeMB);
+        log(`Generated ${(data.length / 1e6).toFixed(1)} MB of JSON data. Sending...`, 'log-info');
+
+        btn.textContent = 'Sending...';
+        await sendLargeRequest('/api/data/', {
+          experimentID,
+          data,
+          filename: `oom_test_${uid()}.json`,
+        }, `Large Payload OOM Test (~${sizeMB} MB JSON)`, 'oomProgress');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send';
+      }
+    }, 50);
+  }
+
+  async function testLargePayloadOOMBase64() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+
+    const sizeMB = parseInt(document.getElementById('oomBase64SizeMB').value) || 100;
+    const btn = document.getElementById('oomBase64Btn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    setTimeout(async () => {
+      try {
+        log(`Generating ~${sizeMB} MB base64 payload...`, 'log-info');
+        const data = generateLargeBase64(sizeMB);
+        log(`Generated ${(data.length / 1e6).toFixed(1)} MB of base64 data. Sending...`, 'log-info');
+
+        btn.textContent = 'Sending...';
+        await sendLargeRequest('/api/base64/', {
+          experimentID,
+          data,
+          filename: `oom_b64_test_${uid()}.bin`,
+        }, `Large Payload OOM Test (~${sizeMB} MB Base64)`, 'oomBase64Progress');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send';
+      }
+    }, 50);
   }
 
   // --- Run All ---
