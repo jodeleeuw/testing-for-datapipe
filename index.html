@@ -6,7 +6,7 @@
   <title>DataPipe Test Page</title>
   <script src="https://unpkg.com/jspsych@8"></script>
   <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2"></script>
-  <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe@0.4"></script>
+  <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe@0.6"></script>
   <link rel="stylesheet" href="https://unpkg.com/jspsych@8/css/jspsych.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -126,6 +126,11 @@
     <p>Runs a 1-trial jsPsych experiment and pipes the JSON results via the plugin.</p>
     <button class="btn-send" onclick="testPluginSaveJSON()">Run</button>
   </div>
+  <div class="test-card success-test">
+    <h3>Plugin: Compressed Large File</h3>
+    <p>Generates ~35MB of repeating text (compresses to ~100KB) and sends via the plugin with gzip compression.</p>
+    <button class="btn-send" onclick="testPluginCompressedLargeFile()">Run</button>
+  </div>
 </div>
 
 <h2>Error Tests</h2>
@@ -165,21 +170,21 @@
 </div>
 
 <h2>Upload Queue Tests (PR #142)</h2>
-<p class="queue-note">Uses the experiment ID above. Before running, add some dummy characters to the experiment's <code>osfFilesLink</code> in Firestore to make the OSF upload fail. Expected response: HTTP 202 with OSF_UPLOAD_QUEUED.</p>
+<p class="queue-note">Uses the experiment ID above. Before running, add some dummy characters to the experiment's <code>osfFilesLink</code> in Firestore so the OSF upload fails server-side. Expected response: HTTP 202 with OSF_UPLOAD_QUEUED. Remember to restore the link after testing.</p>
 <div class="test-grid">
   <div class="test-card queue-test">
     <h3>Trigger Upload Queue (CSV)</h3>
-    <p>Sends valid CSV to an experiment with a bad OSF link. Expected: 202 OSF_UPLOAD_QUEUED</p>
+    <p>Sends valid CSV data. With a corrupted osfFilesLink, expects: 202 OSF_UPLOAD_QUEUED</p>
     <button class="btn-error" onclick="testQueueCSV()">Send</button>
   </div>
   <div class="test-card queue-test">
     <h3>Trigger Upload Queue (Base64)</h3>
-    <p>Sends valid base64 to the base64 endpoint with a bad OSF link. Expected: 202 OSF_UPLOAD_QUEUED</p>
+    <p>Sends valid base64 data. With a corrupted osfFilesLink, expects: 202 OSF_UPLOAD_QUEUED</p>
     <button class="btn-error" onclick="testQueueBase64()">Send</button>
   </div>
   <div class="test-card queue-test">
     <h3>Queue Deduplication</h3>
-    <p>Sends the same filename twice. Second request should not create a duplicate queue entry.</p>
+    <p>Sends the same filename twice. Should not create a duplicate queue entry.</p>
     <button class="btn-error" onclick="testQueueDedup()">Send</button>
   </div>
 </div>
@@ -424,6 +429,65 @@
 
   function testPluginSaveJSON() {
     runPluginExperiment('json');
+  }
+
+  async function testPluginCompressedLargeFile() {
+    const { experimentID } = getConfig();
+    if (!experimentID) { log('Set an experiment ID first.', 'log-warn'); return; }
+
+    const container = document.getElementById('jspsych-container');
+    container.innerHTML = '';
+
+    const filename = `plugin_compressed_${uid()}.csv`;
+    log(`\n--- jsPsych Plugin: Compressed Large File ---`, 'log-header');
+    log(`Filename: ${filename}`, 'log-info');
+    log('Generating ~35MB of repeating CSV data...', 'log-info');
+
+    // Generate a large CSV string (~35MB) from repeating rows.
+    // Repetitive data compresses extremely well with gzip (~100KB).
+    const header = 'trial_index,rt,response,stimulus,correct,time_elapsed\n';
+    const row = '1,342,arrowleft,<p>Press a key</p>,true,1523\n';
+    const targetBytes = 35 * 1024 * 1024; // 35MB
+    const rowCount = Math.ceil(targetBytes / row.length);
+    const largeCSV = header + row.repeat(rowCount);
+    const sizeMB = (largeCSV.length / (1024 * 1024)).toFixed(1);
+    log(`Generated ${sizeMB}MB of CSV data (${rowCount} rows). Sending with compression...`, 'log-info');
+    log('Starting jsPsych experiment (press any key on the trial)...', 'log-info');
+
+    const jsPsych = initJsPsych({
+      display_element: 'jspsych-container',
+      on_finish: function() {
+        log('jsPsych experiment finished.', 'log-success');
+        setTimeout(() => { container.innerHTML = ''; }, 2000);
+      }
+    });
+
+    const trial = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: '<p style="font-size:18px;">Press any key to send the large compressed file.</p>',
+    };
+
+    const save_data = {
+      type: jsPsychPipe,
+      action: 'save',
+      experiment_id: experimentID,
+      filename: filename,
+      compression: true,
+      data_string: function() {
+        return largeCSV;
+      },
+      wait_message: '<p>Compressing and uploading ~35MB of data via DataPipe...</p>',
+      on_finish: function(data) {
+        if (data.success) {
+          log(`Plugin response: success — ${sizeMB}MB uploaded with compression!`, 'log-success');
+        } else {
+          log(`Plugin response: failed (${data.error || 'unknown error'})`, 'log-error');
+        }
+        log(`Full trial data: ${JSON.stringify(data, null, 2)}`, 'log-info');
+      }
+    };
+
+    jsPsych.run([trial, save_data]);
   }
 
   // --- Upload Queue Tests ---
